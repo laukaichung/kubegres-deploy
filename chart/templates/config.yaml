@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMapName }}
+  namespace: default
+
+data:
+
+  backup_database.sh: |
+    #!/bin/bash
+    set -e
+
+    dt=$(date '+%d/%m/%Y %H:%M:%S');
+    fileDt=$(date '+%d_%m_%Y_%H_%M_%S');
+    backUpFileName="$KUBEGRES_RESOURCE_NAME-backup-$fileDt.gz"
+    backUpFilePath="/tmp/$backUpFileName"
+
+    echo "$dt - Starting DB backup of Kubegres resource $KUBEGRES_RESOURCE_NAME into file: $backUpFilePath";
+    echo "$dt - Running: pg_dumpall -h $BACKUP_SOURCE_DB_HOST_NAME -U postgres -c | gzip > $backUpFilePath"
+
+    pg_dump -h "$BACKUP_SOURCE_DB_HOST_NAME" -U $POSTGRES_USER "$DB_NAME" | gzip > "$backUpFilePath"
+
+    if [ $? -ne 0 ]; then
+    rm $backUpFilePath
+    echo "Unable to execute a BackUp. Please check DB connection settings"
+    exit 1
+    fi
+
+    echo "Assuming IAM Roles"
+    export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \
+    $(aws sts assume-role \
+    --role-arn "$AWS_ROLE_ARN" \
+    --role-session-name "DBBackup" \
+    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
+    --output text))
+
+    echo "Uploading the dump to S3";
+
+    aws s3 cp "$backUpFilePath" "s3://$S3_BUCKET/$S3_BACKUP_DIR"
+
+    echo "$dt - DB backup completed for Kubegres resource $Kubegres_RESOURCE_NAME into file: $backUpFilePath";
+
+  primary_init_script.sh: |
+    #!/bin/bash
+    # When testing the script, you should disable `set -e` for easier debugging.
+    # Otherwise, the script would exit without leaving any related eroor logs in the PG container
+    set -e
+
+    dt=$(date '+%d/%m/%Y %H:%M:%S')
+    echo "$dt - Running init script the 1st time Primary PostgreSql container is created..."
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    CREATE DATABASE "$DB_NAME";
+    CREATE USER "$DB_USER" WITH ENCRYPTED PASSWORD '$DB_PASSWORD';
+    EOSQL
+
+    {{ if .Values.DBextensions -}}
+    echo "Creating DB Extension";
+    psql -v ON_ERROR_STOP=0 --username "$POSTGRES_USER" --dbname "$DB_NAME" <<-EOSQL
+    {{- range .Values.DBextensions }}
+    CREATE EXTENSION IF NOT EXISTS {{ . | quote }};
+    {{- end }}
+    EOSQL
+    {{- end }}
+
+    echo "Assuming IAM role";
+    export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \
+    $(aws sts assume-role \
+    --role-arn "$AWS_ROLE_ARN" \
+    --role-session-name "DBBackup" \
+    --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
+    --output text))
+
+    echo "Downloading the latest file from S3";
+    FILE_PATH=`aws s3 ls "$S3_BUCKET/$S3_BACKUP_DIR" --recursive | sort | tail -n 1 | awk '{print $4}'`
+
+    tmpFile=/tmp/db.sql.gz
+    aws s3 cp "s3://$S3_BUCKET/$FILE_PATH" "$tmpFile"
+
+    echo "Restoring data..."
+    zcat "/tmp/db.sql.gz" | psql -v ON_ERROR_STOP=0 -U "$POSTGRES_USER" "$DB_NAME"
+
+    echo "Granting user privileges"
+    psql -v ON_ERROR_STOP=0 --username "$POSTGRES_USER" --dbname "$DB_NAME" <<-EOSQL
+    GRANT CONNECT ON DATABASE "$DB_NAME" to "$DB_USER";
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "$DB_USER";
+    GRANT USAGE ON SCHEMA public to "$DB_USER";
+    GRANT SELECT, UPDATE, USAGE ON ALL SEQUENCES IN SCHEMA public TO "$DB_USER";
+    GRANT SELECT, UPDATE, INSERT, DELETE,TRUNCATE ON ALL TABLES IN SCHEMA public TO "$DB_USER";
+    EOSQL
+
+    rm "$tmpFile"
+    echo "$dt - Init script is completed"

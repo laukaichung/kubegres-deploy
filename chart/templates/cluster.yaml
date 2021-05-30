@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secretName }}
+  namespace: default
+  annotations:
+    vault.security.banzaicloud.io/vault-addr: "https://vault.default.svc.cluster.local:8200"
+    vault.security.banzaicloud.io/vault-role: "default"
+    vault.security.banzaicloud.io/vault-skip-verify: "false"
+    vault.security.banzaicloud.io/vault-path: "kubernetes"
+    vault.security.banzaicloud.io/vault-tls-secret: "vault-tls"
+data:
+  superUserPassword: {{ "vault:secret/data/pg#SUPER_USER_PASSWORD" | b64enc | quote }}
+  replicationUserPassword: {{ "vault:secret/data/pg#REPLICA_USER_PASSWORD" | b64enc | quote }}
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ .Values.backupPVCName }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.size }}
+---
+
+apiVersion: kubegres.reactive-tech.io/v1
+kind: Kubegres
+metadata:
+  name: mypostgres
+  namespace: default
+  annotations:
+    vault.security.banzaicloud.io/vault-addr: "https://vault.default.svc.cluster.local:8200"
+    vault.security.banzaicloud.io/vault-role: "default"
+    vault.security.banzaicloud.io/vault-skip-verify: "false"
+    vault.security.banzaicloud.io/vault-path: "kubernetes"
+    vault.security.banzaicloud.io/vault-tls-secret: "vault-tls"
+spec:
+  replicas: {{ .Values.replicas }}
+  # Use a simple custom image which contains aws-cli for S3 backup.
+  image: {{ .Values.customPGImage }}
+  database:
+    size: {{ .Values.size }}
+    storageClassName: {{ .Values.storageClassName }}
+    volumeMount: /var/lib/postgresql/data
+  customConfig: {{ .Values.configMapName }}
+  backup:
+    schedule: {{ .Values.backupSchedule | quote }}
+    pvcName: {{ .Values.backupPVCName }}
+    volumeMount: /var/lib/backup
+  env:
+    - name: POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ .Values.secretName }}
+          key: superUserPassword
+    - name: POSTGRES_REPLICATION_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ .Values.secretName }}
+          key: replicationUserPassword
+    - name: POSTGRES_DB
+      value: postgres
+    - name: POSTGRES_USER
+      value: postgres
+    - name: DB_NAME
+      value: vault:secret/data/pg#DB_NAME
+    - name: DB_PASSWORD
+      value: vault:secret/data/pg#DB_PASSWORD
+    - name: DB_USER
+      value: vault:secret/data/pg#DB_USER
+    - name: AWS_ROLE_ARN
+      value: vault:secret/data/pg#AWS_ROLE_DATA_BACKUP
+    - name: AWS_ACCESS_KEY_ID
+      value: vault:secret/data/pg#AWS_ACCESS_KEY_ID
+    - name: AWS_SECRET_ACCESS_KEY
+      value: vault:secret/data/pg#AWS_SECRET_ACCESS_KEY
+    - name: S3_BUCKET
+      value: vault:secret/data/pg#S3_BUCKET
+      # The folder is where the dump files reside. The init script will fetch the latest DB dump file from S3 in this folder
+      # The full s3 path should be "$S3_BUCKET/$S3_BACKUP_DIR/"
+    - name: S3_BACKUP_DIR
+      value: db/logical
