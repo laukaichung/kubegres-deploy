@@ -73,7 +73,7 @@ spec:
     - name: DB_USER
       value: vault:secret/data/pg#DB_USER
     - name: AWS_ROLE_ARN
-      value: vault:secret/data/pg#AWS_ROLE_DATA_BACKUP
+      value: vault:secret/data/pg#AWS_ROLE_ARN
     - name: AWS_ACCESS_KEY_ID
       value: vault:secret/data/pg#AWS_ACCESS_KEY_ID
     - name: AWS_SECRET_ACCESS_KEY

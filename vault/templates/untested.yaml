@@ -1,0 +1,196 @@
+# Reference:
+# https://raw.githubusercontent.com/banzaicloud/bank-vaults/master/operator/deploy/cr.yaml
+# https://raw.githubusercontent.com/banzaicloud/bank-vaults/master/operator/deploy/rbac.yaml
+apiVersion: "vault.banzaicloud.com/v1alpha1"
+kind: "Vault"
+metadata:
+  name: "vault"
+spec:
+  size: 1
+  image: vault:1.6.2
+
+  annotations:
+    common/annotation: "true"
+
+  vaultAnnotations:
+    type/instance: "vault"
+
+  vaultConfigurerAnnotations:
+    type/instance: "vaultconfigurer"
+
+  vaultLabels:
+    example.com/log-format: "json"
+
+  vaultConfigurerLabels:
+    example.com/log-format: "string"
+
+  serviceAccount: vault
+
+  serviceType: ClusterIP
+
+  ingress:
+
+    annotations: {}
+
+    spec: {}
+
+  volumes:
+    - name: vault-file
+      persistentVolumeClaim:
+        claimName: vault-file
+
+  volumeMounts:
+    - name: vault-file
+      mountPath: /vault/file
+
+  unsealConfig:
+    options:
+      preFlightChecks: true
+    kubernetes:
+      secretNamespace: default
+
+  # A YAML representation of a final vault config file.
+  # See https://www.vaultproject.io/docs/configuration/ for more information.
+  config:
+    storage:
+      file:
+        path: "${ .Env.VAULT_STORAGE_FILE }" # An example how Vault config environment interpolation can be used
+    listener:
+      tcp:
+        # Listen to both IPV4 and IPV6, useful if you want to run a Dual-Stack cluster
+        address: "[::]:8200"
+        tls_cert_file: /vault/tls/server.crt
+        tls_key_file: /vault/tls/server.key
+    telemetry:
+      statsd_address: localhost:9125
+    ui: true
+
+  vaultEnvsConfig:
+    - name: VAULT_LOG_LEVEL
+      value: debug
+    - name: VAULT_STORAGE_FILE
+      value: "/vault/file"
+
+  istioEnabled: false
+
+  caNamespaces:
+    - "kube-system"
+    - "vswh"
+    - "vault-infra"
+
+  externalConfig:
+    policies:
+      - name: readonly_secrets
+        rules: path "secret/*" {
+          capabilities = ["read", "list"]
+          }
+      - name: allow_secrets
+        rules: path "secret/data/pg" {
+          capabilities = ["create", "read", "update", "delete", "list"]
+          }
+      - name: allow_pki
+        rules: path "pki/*" {
+          capabilities = ["create", "read", "update", "delete", "list"]
+          }
+    secrets:
+      - path: secret
+        type: kv
+        description: General secrets.
+        options:
+          version: 2
+      - type: pki
+        description: Vault PKI Backend
+        config:
+          default_lease_ttl: 168h
+          max_lease_ttl: 720h
+        configuration:
+          config:
+            - name: urls
+              issuing_certificates: https://vault.default:8200/v1/pki/ca
+              crl_distribution_points: https://vault.default:8200/v1/pki/crl
+          root/generate:
+            - name: internal
+              common_name: vault.default
+          roles:
+            - name: default
+              allowed_domains: localhost,pod,svc,default
+              allow_subdomains: true
+              generate_lease: true
+              ttl: 1m
+    auth:
+      - type: kubernetes
+        config:
+          # You must explicitly provide the kubernetes_host if you are running Dual Stack cluster.
+          kubernetes_host: https://kubernetes.default.svc
+          # Must set it up for k8s version 1.21 or above because of the new introduction of Service Account Issuer Discovery
+          disable_iss_validation: true
+        roles:
+          - name: default
+            bound_service_account_names: [ "default", "vault-secrets-webhook", "vault" ]
+            bound_service_account_namespaces: [ "default", "vault-infra" ]
+            policies: [  "allow_pki", "allow_secrets", "readonly_secrets" ]
+            ttl: 1h
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vault-file
+spec:
+  # https://kubernetes.io/docs/concepts/storage/persistent-volumes/#class-1
+  storageClassName: {{ .Values.storageClassName }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.size}}
+
+---
+
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: vault
+
+---
+
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: vault
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "update", "patch"]
+---
+
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: vault
+roleRef:
+  kind: Role
+  name: vault
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: vault
+
+---
+
+# This binding allows the deployed Vault instance to authenticate clients
+# through Kubernetes ServiceAccounts (if configured so).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vault
+    namespace: default

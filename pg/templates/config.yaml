@@ -5,7 +5,7 @@ metadata:
   namespace: default
 
 data:
-
+  # Some env like $KUBEGRES_RESOURCE_NAME, $BACKUP_SOURCE_DB_HOST_NAME are defined by the container.
   backup_database.sh: |
     #!/bin/bash
     set -e
@@ -72,13 +72,13 @@ data:
     --output text))
 
     echo "Downloading the latest file from S3";
-    FILE_PATH=`aws s3 ls "$S3_BUCKET/$S3_BACKUP_DIR" --recursive | sort | tail -n 1 | awk '{print $4}'`
+    file_path=`aws s3 ls "$S3_BUCKET/$S3_BACKUP_DIR" --recursive | sort | tail -n 1 | awk '{print $4}'`
 
-    tmpFile=/tmp/db.sql.gz
-    aws s3 cp "s3://$S3_BUCKET/$FILE_PATH" "$tmpFile"
+    tmp_file=/tmp/db.sql.gz
+    aws s3 cp "s3://$S3_BUCKET/$file_path" "$tmp_file"
 
     echo "Restoring data..."
-    zcat "/tmp/db.sql.gz" | psql -v ON_ERROR_STOP=0 -U "$POSTGRES_USER" "$DB_NAME"
+    zcat "$tmp_file" | psql -v ON_ERROR_STOP=0 -U "$POSTGRES_USER" "$DB_NAME"
 
     echo "Granting user privileges"
     psql -v ON_ERROR_STOP=0 --username "$POSTGRES_USER" --dbname "$DB_NAME" <<-EOSQL
@@ -89,5 +89,5 @@ data:
     GRANT SELECT, UPDATE, INSERT, DELETE,TRUNCATE ON ALL TABLES IN SCHEMA public TO "$DB_USER";
     EOSQL
 
-    rm "$tmpFile"
+    rm "$tmp_file"
     echo "$dt - Init script is completed"

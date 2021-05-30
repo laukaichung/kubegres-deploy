@@ -1,0 +1,12 @@
+{
+  "SUPER_USER_PASSWORD": "xxxx",
+  "REPLICA_USER_PASSWORD": "xxx",
+  "DB_NAME": "xxxx",
+  "DB_PASSWORD": "xxx",
+  "DB_USER": "xxxx",
+  "AWS_ROLE_ARN": "xxx",
+  "AWS_ACCESS_KEY_ID": "xxxx",
+  "AWS_SECRET_ACCESS_KEY": "xxx",
+  "S3_BUCKET": "xxxx",
+  "S3_BACKUP_DIR": "xxx"
+}
