@@ -2,7 +2,7 @@ A [Kubegres](https://github.com/reactive-tech/kubegres) cluster with a custom Po
 
 It uses [Bank Vaults](https://github.com/banzaicloud/bank-vaults) to inject secrets into all Kubegres pods including the master, replica and backup cronjob pods.
 
-Both `backup_database.sh` and `primary_init_script.sh` are overridden in order to use S3 backup and initialization. 
+Both `backup_database.sh` and `primary_init_script.sh` are overridden in order to use S3 for backup storage and initialization. 
 
 The scripts will assume an IAM role before downloading or uploading from a bucket of your choice, so make sure you have created an IAM role and attached this policy to it.
 ````
@@ -31,7 +31,7 @@ The scripts will assume an IAM role before downloading or uploading from a bucke
     "Version": "2012-10-17"
 }
 ````
-The `s3:ListBucket` action is required by the initialization script in order to sort and fetch the latest dump files in a folder.
+The `s3:ListBucket` action is required by the initialization script in order to sort and fetch the latest dump file in a folder.
 
 ### Install Bank Vaults Operator
 ````
@@ -55,7 +55,7 @@ helm upgrade --namespace vault-infra --install vault-secrets-webhook banzaicloud
 ````
 
 ### Import data to Vault
-Once Vault is up, fill in your credentials in `pg-data.json` and import the file to Vault
+Once Vault is up, fill in your credentials in `pg-credentials.json` and import the file to Vault
 ````
 kubectl port-forward vault-0 8200 &
 
@@ -67,7 +67,7 @@ export VAULT_CACERT=/tmp/vault-ca.crt
 
 export VAULT_TOKEN=$(kubectl get secrets vault-unseal-keys -o jsonpath={.data.vault-root} | base64 --decode)
 
-vault kv put -format=json secret/pg @pg-data.json
+vault kv put -format=json secret/pg @pg-credentials.json
 
 ````
 
