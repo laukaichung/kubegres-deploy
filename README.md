@@ -1,4 +1,4 @@
-A [Kubegres](https://github.com/reactive-tech/kubegres) cluster using a custom PG image. It uses [Bank Vaults](https://github.com/banzaicloud/bank-vaults) to inject secrets into the pods environment.
+A [Kubegres](https://github.com/reactive-tech/kubegres) cluster with a custom Postgres v13.3 Docker image. It uses [Bank Vaults](https://github.com/banzaicloud/bank-vaults) to inject secrets into all Kubegres pods including the master, replica and backup cronjob pods.
 
 ````
 
